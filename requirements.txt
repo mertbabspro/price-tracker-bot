@@ -1,2 +1,1 @@
-requests==2.31.0 > requirements.txt
-beautifulsoup4==4.12.2 >> requirements.txt
+requests==2.31.0
