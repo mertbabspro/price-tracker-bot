@@ -1,36 +1,8 @@
-from selenium import webdriver
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException, NoSuchElementException
-from selenium.webdriver.chrome.service import Service
-from webdriver_manager.chrome import ChromeDriverManager
 import time
 import json
 import requests
-import logging
 import re
 import os
-
-# Log ayarları - sadece hatalar için
-logging.basicConfig(level=logging.ERROR, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
-
-def konfigurasyonu_yukle():
-    """JSON dosyasından konfigürasyonu yükle"""
-    try:
-        with open("url.json", "r", encoding="utf-8") as f:
-            config = json.load(f)
-        return config["chtid"], config["bt"], config["url"]
-    except FileNotFoundError:
-        logger.error("url.json dosyası bulunamadı!")
-        return None, None, None
-    except KeyError as e:
-        logger.error(f"JSON dosyasında eksik anahtar: {e}")
-        return None, None, None
-    except json.JSONDecodeError:
-        logger.error("JSON dosyası bozuk!")
-        return None, None, None
 
 def mesaj_gonder(bot_token, chat_id, mesaj):
     """Telegram'a mesaj gönder"""
@@ -38,165 +10,103 @@ def mesaj_gonder(bot_token, chat_id, mesaj):
         url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
         data = {"chat_id": chat_id, "text": mesaj}
         response = requests.post(url, data=data, timeout=10)
-        
-        if response.status_code == 200:
-            return True
-        else:
-            return False
-    except requests.exceptions.RequestException as e:
+        return response.status_code == 200
+    except:
         return False
 
-def fiyat_temizle(fiyat_text):
-    """Fiyat metnini sayıya çevir"""
-    if not fiyat_text:
-        return None
-    
-    # Sadece sayıları ve virgülü al
-    temiz_fiyat = re.sub(r'[^\d,.]', '', fiyat_text)
-    temiz_fiyat = temiz_fiyat.replace(',', '.')
-    
+def hepsiburada_fiyat_al(url):
+    """Hepsiburada'dan fiyat al"""
     try:
-        return float(temiz_fiyat)
-    except ValueError:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        }
+        
+        response = requests.get(url, headers=headers, timeout=15)
+        html = response.text
+        
+        # Hepsiburada fiyat pattern'leri
+        patterns = [
+            r'"currentPrice":"([\d,]+\.?\d*)"',
+            r'"price":"([\d,]+\.?\d*)"',
+            r'data-bind="text: currentPriceBeforePoint"[^>]*>(\d+)',
+            r'currentPrice[^>]*>[\s]*(\d{1,3}(?:[.,]\d{3})*)',
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, html)
+            if match:
+                fiyat_str = match.group(1).replace(',', '')
+                try:
+                    return float(fiyat_str)
+                except:
+                    continue
+        
+        return None
+    except:
         return None
 
-def onceki_fiyati_kaydet(fiyat):
-    """Fiyatı dosyaya kaydet"""
+def fiyat_kaydet(fiyat):
+    """Fiyatı kaydet"""
     try:
-        with open("onceki_fiyat.json", "w", encoding="utf-8") as f:
-            json.dump({"fiyat": fiyat, "tarih": time.time()}, f)
-    except Exception as e:
+        with open("onceki_fiyat.txt", "w") as f:
+            f.write(str(fiyat))
+    except:
         pass
 
-def onceki_fiyati_oku():
-    """Önceki fiyatı dosyadan oku"""
+def fiyat_oku():
+    """Önceki fiyatı oku"""
     try:
-        if os.path.exists("onceki_fiyat.json"):
-            with open("onceki_fiyat.json", "r", encoding="utf-8") as f:
-                data = json.load(f)
-                return data.get("fiyat")
+        if os.path.exists("onceki_fiyat.txt"):
+            with open("onceki_fiyat.txt", "r") as f:
+                return float(f.read().strip())
         return None
-    except Exception as e:
-        return None
-
-def fiyat_karsilastir(yeni_fiyat, onceki_fiyat):
-    """Fiyatları karşılaştır ve durum mesajı oluştur"""
-    if onceki_fiyat is None:
-        return "🆕 İlk fiyat kaydı", "bilgi"
-    
-    fark = yeni_fiyat - onceki_fiyat
-    yuzde_fark = (fark / onceki_fiyat) * 100
-    
-    if fark < -0.01:  # Fiyat düştü
-        return f"📉 FİYAT DÜŞTÜ!\n💰 Önceki: {onceki_fiyat:.2f} TL\n🔥 Şimdi: {yeni_fiyat:.2f} TL\n💸 İndirim: {abs(fark):.2f} TL (%{abs(yuzde_fark):.1f})", "dusus"
-    elif fark > 0.01:  # Fiyat yükseldi
-        return f"📈 Fiyat yükseldi\n💰 Önceki: {onceki_fiyat:.2f} TL\n📊 Şimdi: {yeni_fiyat:.2f} TL\n⬆️ Artış: {fark:.2f} TL (%{yuzde_fark:.1f})", "yukseli"
-    else:  # Fiyat aynı
-        return f"💰 Fiyat değişmedi: {yeni_fiyat:.2f} TL", "ayni"
-    """Telegram'a mesaj gönder"""
-    try:
-        url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-        data = {"chat_id": chat_id, "text": mesaj}
-        response = requests.post(url, data=data, timeout=10)
-        
-        if response.status_code == 200:
-            return True
-        else:
-            return False
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Mesaj gönderme hatası: {e}")
-        return False
-
-def tarayici_baslat():
-    """Chrome tarayıcısını başlat"""
-    options = webdriver.ChromeOptions()
-    options.add_argument("--headless")  # Arka planda çalıştır
-    options.add_argument("--disable-gpu")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--window-size=1920,1080")
-    options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
-    
-    try:
-        driver = webdriver.Chrome(options=options)
-        return driver
-    except Exception as e:
-        logger.error(f"Tarayıcı başlatılamadı: {e}")
-        return None
-
-def fiyat_al(driver, url, fiyat_class_name="bWwoI8vknB6COlRVbpRj"):
-    """Belirtilen URL'den fiyatı al"""
-    try:
-        driver.get(url)
-        
-        # Sayfanın yüklenmesini bekle
-        wait = WebDriverWait(driver, 20)
-        
-        # Fiyat elementinin yüklenmesini bekle
-        fiyat_element = wait.until(
-            EC.presence_of_element_located((By.CLASS_NAME, fiyat_class_name))
-        )
-        
-        fiyat = fiyat_element.text.strip()
-        return fiyat
-        
     except:
         return None
 
 def main():
-    """Ana fonksiyon"""
-    # Konfigürasyonu yükle
-    chat_id, bot_token, site_url = konfigurasyonu_yukle()
-    
-    if not all([chat_id, bot_token, site_url]):
-        return
-    
-    # Tarayıcıyı başlat
-    driver = tarayici_baslat()
-    if not driver:
-        return
+    # Sabit değerler
+    CHAT_ID = "6805362332"
+    BOT_TOKEN = "8006318166:AAF0GcJfrTDfqAip-I3kavgv9kvtNgLOh5s"
+    URL = "https://www.hepsiburada.com/madame-coco-benard-6-kisilik-12-parca-kahve-fincan-seti-beyaz-110-ml-p-HBCV000079PQO1"
     
     try:
-        # Fiyatı al
-        fiyat = fiyat_al(driver, site_url)
+        # Yeni fiyatı al
+        yeni_fiyat = hepsiburada_fiyat_al(URL)
         
-        if fiyat:
-            # Fiyatı sayıya çevir
-            yeni_fiyat_sayi = fiyat_temizle(fiyat)
+        if yeni_fiyat:
+            # Önceki fiyatı oku
+            onceki_fiyat = fiyat_oku()
             
-            if yeni_fiyat_sayi:
-                # Önceki fiyatı oku
-                onceki_fiyat = onceki_fiyati_oku()
-                
-                # Fiyatları karşılaştır
-                durum_mesaji, durum_tipi = fiyat_karsilastir(yeni_fiyat_sayi, onceki_fiyat)
-                
-                # Mesaj gönder
-                mesaj_gonder(bot_token, chat_id, durum_mesaji)
-                
-                # Yeni fiyatı kaydet
-                onceki_fiyati_kaydet(yeni_fiyat_sayi)
+            if onceki_fiyat is None:
+                # İlk kayıt
+                mesaj = f"🆕 Fiyat takibi başladı!\n💰 Mevcut fiyat: {yeni_fiyat:.2f} TL"
+                mesaj_gonder(BOT_TOKEN, CHAT_ID, mesaj)
             else:
-                hata_mesaji = "❌ Fiyat formatı anlaşılamadı."
-                mesaj_gonder(bot_token, chat_id, hata_mesaji)
+                # Fiyat karşılaştır
+                fark = yeni_fiyat - onceki_fiyat
+                
+                if fark < -0.5:  # 50 kuruş düşmüş
+                    yuzde = abs(fark / onceki_fiyat * 100)
+                    mesaj = f"📉 FİYAT DÜŞTÜ! 🔥\n\n💰 Önceki: {onceki_fiyat:.2f} TL\n🎯 Şimdi: {yeni_fiyat:.2f} TL\n💸 İndirim: {abs(fark):.2f} TL (%{yuzde:.1f})"
+                    mesaj_gonder(BOT_TOKEN, CHAT_ID, mesaj)
+                elif fark > 0.5:  # 50 kuruş yükselmiş
+                    yuzde = fark / onceki_fiyat * 100
+                    mesaj = f"📈 Fiyat yükseldi\n\n💰 Önceki: {onceki_fiyat:.2f} TL\n📊 Şimdi: {yeni_fiyat:.2f} TL\n⬆️ Artış: {fark:.2f} TL (%{yuzde:.1f})"
+                    mesaj_gonder(BOT_TOKEN, CHAT_ID, mesaj)
+            
+            # Yeni fiyatı kaydet
+            fiyat_kaydet(yeni_fiyat)
         else:
-            hata_mesaji = "❌ Fiyat alınamadı. Site yapısı değişmiş olabilir."
-            mesaj_gonder(bot_token, chat_id, hata_mesaji)
+            # Fiyat alınamadı
+            mesaj = "❌ Fiyat alınamadı. Site erişilemeyebilir."
+            mesaj_gonder(BOT_TOKEN, CHAT_ID, mesaj)
             
     except Exception as e:
-        hata_mesaji = f"❌ Program hatası: {str(e)}"
-        mesaj_gonder(bot_token, chat_id, hata_mesaji)
-        
-    finally:
-        # Tarayıcıyı kapat
-        driver.quit()
+        mesaj = f"❌ Hata: {str(e)}"
+        mesaj_gonder(BOT_TOKEN, CHAT_ID, mesaj)
 
 if __name__ == "__main__":
-    # Railway için sürekli çalışım
-    if os.getenv('RAILWAY_ENVIRONMENT'):
-        while True:
-            main()
-            time.sleep(300)  # 5 dakika bekle
-    else:
-        # Local için tek seferlik
+    # Railway'de sürekli çalış
+    while True:
         main()
+        time.sleep(300)  # 5 dakika bekle
